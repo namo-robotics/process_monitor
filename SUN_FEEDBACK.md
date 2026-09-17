@@ -2,8 +2,14 @@
 
 Each numbered item below is an independent, issue-ready proposal, ordered by
 impact on this project. No GitHub issues have been created. Compiler reproducers
-were checked with `sun 0.dev (67560c84f00b)` on Linux x86_64; the first two also
-occurred with `9eb5f4ae8f5c`.
+were checked with `sun 0.dev (67560c84f00b)` on Linux x86_64; the two compiler reproducers also
+occurred with `9eb5f4ae8f5c`. API-gap proposals below were checked against the
+pinned stdlib sources, not an assumed latest release.
+
+Some unsafe calls can be removed by refactoring without upstream changes:
+`std.process.pid()`, `kill()`, and child helpers already exist. `std.env.Env.args`
+also copies argv, although its raw-pointer entry interface still leaves the caller
+responsible for pointer validity. New API names below describe proposals.
 
 ## 1. P1 — Diagnose conflicting native symbol signatures before LLVM verification
 
@@ -40,7 +46,87 @@ the callback address at its small unsafe FFI boundary (`src/posix.sun`).
 with a precise source diagnostic; incompatible extern declarations imported from
 moons are covered by compiler tests.
 
-## 2. P2 — Reject bare returns in value-returning functions during semantic analysis
+## 2. P2 — Provide a portable scoped terminal API
+
+**Type:** missing standard-library capability.
+
+The stdlib provides file descriptors and polling, but the monitor must bind
+`isatty`, `tcgetattr`, `tcsetattr`, `cfmakeraw`, and `ioctl` itself. Native request
+codes and aligned opaque termios storage belong in a shared platform boundary.
+
+**Proposed capability:** scoped raw/cbreak mode with automatic restoration,
+terminal-size queries, and nonblocking key reads on Linux and macOS. Keep signal
+policy explicit; do not silently install process-wide handlers.
+
+**Impact/workaround:** `src/posix.sun` and `src/terminal.sun` maintain these bindings
+and restoration behavior locally.
+
+**Acceptance:** tests cover restoration after normal exit and exceptions, resize,
+non-TTY streams, and the documented signal integration on both operating systems.
+
+## 3. P2 — Add safe borrowed streams and bounds-checked byte I/O
+
+**Type:** standard-library safety and ergonomics.
+
+`File.read_into` and `write_bytes` currently accept a raw pointer and a separate
+length. Merely calling these through a safe-looking method does not prove the
+buffer is valid or large enough. The monitor also needs stdin/stdout/stderr without
+adopting ownership and accidentally closing shared descriptors.
+
+**Proposed capability:** borrowed standard streams with `read` into a mutable
+bounded slice, `write_all` from a read-only slice, and explicit EOF/would-block
+results. Handle partial operations and EINTR inside the implementation. Include
+bounds-checked native-endian integer decoding for OS response buffers.
+
+**Impact:** replaces raw reads/writes, pointer offsets, and Darwin argv integer
+loads in `src/posix.sun`, `src/terminal.sun`, `src/app.sun`, and `src/darwin.sun`.
+
+**Acceptance:** short-I/O, interruption, empty-buffer, invalid-range, and borrowed
+ownership tests; safe APIs cannot request access beyond a supplied buffer.
+
+## 4. P2 — Provide signal events and a lock-free atomic flag
+
+**Type:** missing standard-library capability.
+
+The monitor registers POSIX callbacks through an integer ABI and uses raw atomic
+intrinsics to communicate shutdown. An ordinary callback abstraction is not enough:
+allocating or acquiring locks inside a native signal handler can deadlock.
+
+**Proposed capability:** a scoped signal subscription that exposes events to the
+existing poller; handlers perform only documented async-signal-safe operations.
+Also provide an atomic Boolean with documented memory ordering and lock-free
+behavior on supported targets. Keep handler installation and restoration explicit.
+
+**Impact:** removes callback-address conversions and atomic pointer operations
+from `src/app.sun` and `src/posix.sun`.
+
+**Acceptance:** repeated SIGINT/SIGTERM delivery, event-loop wakeup, handler
+restoration, and signal-context safety on Linux and macOS. A generic atomic API
+must not claim signal safety if its implementation can fall back to locks.
+
+## 5. P2 — Add process inspection and identity-bound process handles
+
+**Type:** missing standard-library capability.
+
+The existing `std.process.pid()`, `kill()`, and child-process APIs cover some of
+our bindings already. They do not replace portable enumeration/resource snapshots
+or an identity-bound handle to an arbitrary visible process.
+
+**Proposed capability:** process identity (PID plus start marker), cumulative CPU
+time with explicit units, RSS, executable/arguments, system physical memory, and
+page size. Return unavailable data distinctly. Provide an owned process handle
+with terminate/kill and explicit platform guarantees for PID reuse protection.
+Linux can use pidfds; do not silently promise equivalent atomic protection for a
+macOS implementation that only checks identity before POSIX kill.
+
+**Impact:** centralizes the libproc, sysctl, sysconf, readlink, and pidfd bindings
+currently maintained in `src/linux.sun`, `src/darwin.sun`, and `src/control.sun`.
+
+**Acceptance:** native tests for exits, permission errors, reused identities,
+units, handle closure, and unsupported kernel facilities. Inspection requires no
+privileges beyond those of the caller.
+
+## 6. P2 — Reject bare returns in value-returning functions during semantic analysis
 
 **Type:** compiler diagnostic bug.
 
@@ -68,25 +154,27 @@ exposed this; the application now supplies explicit values on every return path.
 **Acceptance:** semantic analysis rejects every reachable bare return in a
 non-void function, without relying on LLVM verification.
 
-## 3. P2 — Provide a portable scoped terminal API
+## 7. P3 — Strengthen typed FFI declarations and ABI validation
 
-**Type:** missing standard-library capability.
+**Type:** language/FFI improvement.
 
-The stdlib provides file descriptors and polling, but the monitor must bind
-`isatty`, `tcgetattr`, `tcsetattr`, `cfmakeraw`, and `ioctl` itself. Native request
-codes and aligned opaque termios storage belong in a shared platform boundary.
+Handwritten bindings currently use opaque aligned buffers, manually mirrored C
+layouts, integer request codes, and an integer callback workaround. Removing the
+`unsafe` keyword around these operations would not establish their correctness.
 
-**Proposed capability:** scoped raw/cbreak mode with automatic restoration,
-terminal-size queries, and nonblocking key reads on Linux and macOS. Keep signal
-policy explicit; do not silently install process-wide handlers.
+**Proposed capability:** typed C callbacks with a declared calling convention,
+explicit C-layout declarations with size/alignment/offset checks, and a documented
+binding-generation path using target SDK headers. Support scoped buffer borrowing
+at FFI boundaries so pointers cannot outlive their backing storage. Diagnose
+conflicting declarations before code generation, as in issue 1.
 
-**Impact/workaround:** `src/posix.sun` and `src/terminal.sun` maintain these bindings
-and restoration behavior locally.
+**Impact:** makes terminal and macOS collector wrappers smaller and easier to
+audit. Keep unverifiable foreign contracts inside a small unsafe implementation.
 
-**Acceptance:** tests cover restoration after normal exit and exceptions, resize,
-non-TTY streams, and the documented signal integration on both operating systems.
+**Acceptance:** ABI tests against native C layouts on all supported architectures,
+callback mismatch diagnostics, and examples that reject escaped borrowed pointers.
 
-## 4. P3 — Add bounded buffered line reading for arbitrary files
+## 8. P3 — Add bounded buffered line reading for arbitrary files
 
 **Type:** missing standard-library convenience/API.
 
