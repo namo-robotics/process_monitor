@@ -24,6 +24,9 @@ build/process_monitor --top all --interval 0.5 --history 300
 The build checks the compiler revision. `SUN_BIN=/path/to/sun` selects another
 installation; `ALLOW_UNTESTED_SUN=1` explicitly permits an untested revision.
 Builds use native dynamic linking. On macOS the build also links libproc.
+`process_monitor --version` prints the source commit embedded during the build.
+When building without Git metadata, set `BUILD_REVISION` to the full commit SHA;
+otherwise the version is reported as `unknown`.
 
 | Target | Implementation | Validation in this workspace |
 | --- | --- | --- |
@@ -53,10 +56,17 @@ artifact hashes in the lock, and rerun compatibility tests. No `sun_serve` artif
 are required.
 
 Each successful job uploads a `.tar.gz` archive and SHA-256 checksum as workflow
-artifacts. Pushing a version tag such as `v0.1.0` publishes a GitHub Release only
-after all three native jobs pass. Uploads stay in a draft until all assets arrive;
-a rerun can resume a draft but will not replace an already published release.
-The release includes all three archives and `SHA256SUMS`.
+artifacts. After all three native jobs pass, every branch push updates the same
+[`dev` prerelease](https://github.com/namo-robotics/process_monitor/releases/tag/dev),
+replacing its archives and `SHA256SUMS`. The `dev` tag and release notes identify
+the packaged commit. Publication is serialized across branches to prevent mixed
+uploads. Pull requests and manual runs only upload workflow artifacts.
+
+Pushing a version tag such as `v0.1.0` publishes a separate GitHub Release.
+Versioned uploads stay in a draft until all assets arrive; a rerun can resume a
+draft but will not replace an already published versioned release. Each release
+includes all three archives and `SHA256SUMS`. The installer selects the latest
+stable release; development builds are available from the `dev` prerelease.
 
 Extract the archive for your architecture and run `./process_monitor`. Sun is not
 needed at runtime. Linux packages target Ubuntu 24.04's system libraries; older
@@ -124,6 +134,7 @@ prints aligned tables and monochrome dot plots without terminal control sequence
 --labels FILE          explicit live-process labels
 --samples N            exit after N samples
 --help                 show usage
+--version              show the build's source commit
 ```
 
 ## Measurements and retention

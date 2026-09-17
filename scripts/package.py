@@ -44,8 +44,12 @@ def stage_payload(directory, version, target, revision):
     (directory / 'build-info.json').write_text(json.dumps(metadata, indent=2) + '\n')
 
 
-def smoke_test(binary):
+def smoke_test(binary, revision):
     """Run the extracted executable without depending on the compiler or workspace."""
+    version = subprocess.run([str(binary), '--version'], check=True, capture_output=True,
+                             text=True, timeout=15, cwd=binary.parent)
+    if version.stdout.strip() != f'process_monitor {revision}':
+        raise ValueError('Executable commit does not match the release metadata')
     subprocess.run([str(binary), '--help'], check=True, capture_output=True, timeout=15,
                    cwd=binary.parent)
     subprocess.run([str(binary), '--samples', '2', '--interval', '0.1', '--top', '1'],
@@ -75,7 +79,7 @@ def package(version, target, revision):
         # The archive is created above exclusively from our fixed payload files.
         with tarfile.open(archive) as source:
             source.extractall(extracted)
-        smoke_test(extracted / name / 'process_monitor')
+        smoke_test(extracted / name / 'process_monitor', revision)
         checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
         shutil.copy2(archive, destination / archive.name)
         (destination / f'{archive.name}.sha256').write_text(f'{checksum}  {archive.name}\n')

@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 SUN_BIN=${SUN_BIN:-sun}
 SUN_LIB_ROOT=${SUN_LIB_ROOT:-/usr/lib/sun}
 mkdir -p build
+bash scripts/build-version.sh
 # The workspace search path wins over --lib-path; restore its bundle after checks.
 backup=$(mktemp -d)
 if [[ -f build/stdlib.moon ]]; then cp build/stdlib.moon "$backup/stdlib.moon"; fi

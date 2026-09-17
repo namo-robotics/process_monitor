@@ -15,6 +15,7 @@ public module process_monitor {
     var labels: String = String("");
     var samples: i64 = 0;
     var help: bool = false;
+    var version: bool = false;
 
     /* Applies one validated option without accessing external resources. */
     method set(a: const ref HeapAllocator, key: const ref String, value: ref String) void throws IError {
@@ -115,6 +116,10 @@ public module process_monitor {
       var key = from_c_str(a, unsafe { _load<raw_ptr<u8>>(argv, i); });
       if (key.equals_literal("--help") or key.equals_literal("-h")) {
         o.help = true;
+        continue;
+      }
+      if (key.equals_literal("--version")) {
+        o.version = true;
         continue;
       }
       if (i + 1 >= argc) {

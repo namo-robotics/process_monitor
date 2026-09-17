@@ -67,6 +67,7 @@ def invalid_options():
                  ('--ui','web'),('--unknown','x'),('--record','x','--replay','y')]:
         run(*args, code=1)
     assert 'Usage:' in run('--help').stdout
+    assert re.fullmatch(r'process_monitor (?:[0-9a-f]{40}|unknown)\n', run('--version').stdout)
 
 
 def drain_terminal(master, output, duration):

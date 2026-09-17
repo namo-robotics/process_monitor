@@ -14,4 +14,5 @@ if [[ -n "${SUN_TARGET:-}" ]]; then
   link_flags+=(--target "$SUN_TARGET")
 fi
 mkdir -p build
+bash scripts/build-version.sh
 "$SUN_BIN" -c --dynamic -o build/process_monitor src/main.sun "${link_flags[@]}"
