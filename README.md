@@ -1,6 +1,16 @@
- # Process Monitor
+<h1 align="center">Process Monitor</h1>
 
-![Process monitor terminal dashboard](assets/screenshot.png)
+<p align="center">
+  <img src="assets/screenshot.png" alt="Process monitor terminal dashboard">
+</p>
+
+<h2 align="center">Written in <a href="https://github.com/namo-robotics/sun">Sun</a></h2>
+
+<p align="center">
+  <a href="https://github.com/namo-robotics/process_monitor/actions/workflows/ci.yml">
+    <img src="https://github.com/namo-robotics/process_monitor/actions/workflows/ci.yml/badge.svg" alt="Build, test, and release CI status">
+  </a>
+</p>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/namo-robotics/process_monitor/main/scripts/install.sh | bash
