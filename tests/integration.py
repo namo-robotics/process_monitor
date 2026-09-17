@@ -68,6 +68,15 @@ def invalid_options():
     assert 'Usage:' in run('--help').stdout
 
 
+def drain_terminal(master, output, duration):
+    """Read terminal output while waiting so the child can keep writing."""
+    deadline = time.monotonic() + duration
+    while (remaining := deadline - time.monotonic()) > 0:
+        ready, _, _ = select.select([master], [], [], remaining)
+        if ready:
+            output.extend(os.read(master, 65536))
+
+
 def terminal_cleanup(directory):
     """Exercise interactive commands, resizing, pause, and signal restoration."""
     for shutdown in ('keyboard', 'signal'):
@@ -78,24 +87,27 @@ def terminal_cleanup(directory):
         child = subprocess.Popen([str(BIN), '--interval', '.1', '--record', str(record)], stdin=slave, stdout=slave, stderr=slave)
         output = bytearray()
         try:
-            deadline = time.monotonic() + 1
-            while time.monotonic() < deadline:
-                ready, _, _ = select.select([master], [], [], .1)
-                if ready:
-                    output.extend(os.read(master, 65536))
+            drain_terminal(master, output, 1)
             os.write(master, b'm5\x1b[B\x1b[A? ')
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 68, 0, 0))
-            time.sleep(.1)
-            count_before = len(record.read_text().splitlines())
-            time.sleep(.3)
-            count_after = len(record.read_text().splitlines())
+            drain_terminal(master, output, .1)
+            count_before = record.read_bytes().count(b'\n')
+            count_after = count_before
+            deadline = time.monotonic() + 5
+            while count_after <= count_before and time.monotonic() < deadline:
+                drain_terminal(master, output, .1)
+                count_after = record.read_bytes().count(b'\n')
             assert count_after > count_before, 'recording must continue while display is paused'
             os.write(master, b' ')
             if shutdown == 'keyboard':
                 os.write(master, b'q')
             else:
                 child.send_signal(signal.SIGTERM)
-            child.wait(timeout=5)
+            deadline = time.monotonic() + 5
+            while child.poll() is None and time.monotonic() < deadline:
+                drain_terminal(master, output, .1)
+            assert child.poll() is not None, 'monitor did not exit while terminal output was drained'
+            child.wait(timeout=0)
             while select.select([master], [], [], 0)[0]:
                 output.extend(os.read(master, 65536))
             assert child.returncode == 0, output.decode(errors='replace')
