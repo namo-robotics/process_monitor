@@ -1,0 +1,127 @@
+/* Pure formatting helpers and sampled terminal history graphs. */
+public module process_monitor {
+  using std;
+
+  /* Bounds text length and removes terminal control characters. */
+  function safe_text(a: const ref HeapAllocator, s: const ref String, width: i64) String throws IError {
+    var out = String("");
+    for (var i: i64 = 0; i < s.length() and i < width; i = i + 1) {
+      var ch = s.at(i);
+      if (ch >= 32u8 and ch < 127u8) {
+        out.append_char(ch);
+      } else {
+        out.append("?");
+      }
+    }
+    return out;
+  }
+  /* Formats an available measurement with a decimal digit or an unavailable marker. */
+  function decimal(value: f64) String {
+    if (value < 0.0) {
+      return String("N/A");
+    }
+    var n = _convert<i64>(value * 10.0);
+    var out = String("");
+    out.append(n / 10);
+    out.append(".");
+    out.append(n % 10);
+    return out;
+  }
+  /* Pads a formatted value to its display column width. */
+  function padded(s: const ref String, width: i64) String {
+    var out = String("");
+    out.append(s);
+    while (out.length() < width) {
+      out.append(" ");
+    }
+    return out;
+  }
+
+  /* Reads one resource value for a stable identity without allocating strings. */
+  function history_value(f: ref Frame, pid: i64, start: i64, memory: bool) f64 throws IError {
+    for (var i: i64 = 0; i < f.processes.size(); i = i + 1) {
+      var p: ref Process = f.processes.get(i);
+      if (p.pid == pid and p.start == start) {
+        if (not memory) {
+          return p.cpu;
+        }
+        if (p.rss < 0) {
+          return -1.0;
+        }
+        return _convert<f64>(p.rss) / 1048576.0;
+      }
+    }
+    return -1.0;
+  }
+
+  /* Samples the retained window uniformly for a compact chart. */
+  function chart_values(a: const ref HeapAllocator, h: ref History, id: const ref String, memory: bool, width: i64) Vec<f64> throws IError {
+    var values = Vec<f64>(a, 0);
+    if (width < 1 or h.frames.is_empty() or id.is_empty()) {
+      return values;
+    }
+    var parts = id.split(a, b':');
+    if (parts.size() != 2) {
+      return values;
+    }
+    var pid = number(parts.get(0));
+    var start = number(parts.get(1));
+    var count = h.frames.size();
+    if (count > width) {
+      count = width;
+    }
+    values.reserve(count);
+    for (var i: i64 = 0; i < count; i = i + 1) {
+      var index: i64 = 0;
+      if (count > 1) {
+        index = i * (h.frames.size() - 1) / (count - 1);
+      }
+      values.push(history_value(h.frames.get(index), pid, start, memory));
+    }
+    return values;
+  }
+
+  /* Converts chart values to relative levels while preserving missing samples. */
+  function render_spark(values: ref Vec<f64>, show_peak: bool) String throws IError {
+    var out = String("");
+    var peak: f64 = 0.0;
+    var available = false;
+    for (var i: i64 = 0; i < values.size(); i = i + 1) {
+      var value: f64 = values.get(i);
+      if (value >= 0.0) {
+        available = true;
+      }
+      if (value > peak) {
+        peak = value;
+      }
+    }
+    var chars = String("._-:=+*#%@");
+    for (var i: i64 = 0; i < values.size(); i = i + 1) {
+      var value: f64 = values.get(i);
+      if (value < 0.0) {
+        out.append(" ");
+        continue;
+      }
+      var level: i64 = 0;
+      if (peak > 0.0) {
+        level = _convert<i64>(value * 9.0 / peak);
+      }
+      out.append_char(chars.at(level));
+    }
+    if (show_peak) {
+      out.append(" peak ");
+      if (available) {
+        out.append(decimal(peak));
+      } else {
+        out.append("N/A");
+      }
+    }
+    return out;
+  }
+
+  /* Summarizes retained history on an independent resource scale. */
+  function spark(a: const ref HeapAllocator, h: ref History, id: const ref String, memory: bool, width: i64) String throws IError {
+    var values = chart_values(a, h, id, memory, width);
+    return render_spark(values, width > 12);
+  }
+}

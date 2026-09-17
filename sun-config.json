@@ -1,0 +1,12 @@
+{
+  "root": true,
+  "sun_path": ["build"],
+  "entrypoints": [
+    {
+      "path": "src/main.sun",
+      "type": "binary",
+      "output_name": "build/process_monitor",
+      "test_binary_name": "build/process_monitor_test"
+    }
+  ]
+}
