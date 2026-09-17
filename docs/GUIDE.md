@@ -66,7 +66,7 @@ Pushing a version tag such as `v0.1.0` publishes a separate GitHub Release.
 Versioned uploads stay in a draft until all assets arrive; a rerun can resume a
 draft but will not replace an already published versioned release. Each release
 includes all three archives and `SHA256SUMS`. The installer selects the latest
-stable release; development builds are available from the `dev` prerelease.
+stable release, falling back to the `dev` prerelease when no stable release exists.
 
 Extract the archive for your architecture and run `./process_monitor`. Sun is not
 needed at runtime. Linux packages target Ubuntu 24.04's system libraries; older

@@ -10,11 +10,20 @@ case "$(uname -s):$(uname -m)" in
   *) echo 'Supported targets: Linux x86_64/ARM64 and Apple Silicon macOS.' >&2; exit 1 ;;
 esac
 
-# Resolve the latest release once so all downloads refer to the same version.
+# Prefer a stable release and use the development build when none exists.
 repository=https://github.com/namo-robotics/process_monitor
-release_url=$(curl --fail --silent --show-error --location --output /dev/null --write-out '%{url_effective}' "$repository/releases/latest")
-version=${release_url##*/}
-if [[ ! "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+response=$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code} %{url_effective}' "$repository/releases/latest")
+status=${response%% *}
+release_url=${response#* }
+if [[ "$status" == 404 || ( "$status" == 200 && "$release_url" == "$repository/releases" ) ]]; then
+  version=dev
+elif [[ "$status" == 200 ]]; then
+  version=${release_url##*/}
+else
+  echo "Could not resolve the latest release (HTTP $status)." >&2
+  exit 1
+fi
+if [[ "$version" != dev && ! "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
   echo 'No supported published release was found.' >&2
   exit 1
 fi
@@ -43,3 +52,7 @@ install_dir="${PREFIX:-$HOME/.local}/bin"
 mkdir -p "$install_dir"
 install -m 755 "$work/$binary" "$install_dir/process_monitor"
 printf 'Installed %s\nRun: %s/process_monitor\n' "$version" "$install_dir"
+case ":$PATH:" in
+  *":$install_dir:"*) ;;
+  *) printf 'Add to your shell PATH: export PATH="%s:$PATH"\n' "$install_dir" ;;
+esac

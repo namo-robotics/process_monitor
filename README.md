@@ -25,7 +25,9 @@
 curl -fsSL https://raw.githubusercontent.com/namo-robotics/process_monitor/main/scripts/install.sh | bash
 ```
 
-Installs the latest release to `~/.local/bin`. Requires a published release.
+Installs the latest stable release to `~/.local/bin`, or the `dev` build if no
+stable release exists. Requires a published release. Ensure `~/.local/bin` is on
+your `PATH`.
 
 ## Usage
 
