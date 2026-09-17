@@ -36,11 +36,21 @@ checks in `FOLLOWUP.md` pass. Cross-compilation is not a substitute for those ch
 
 ## CI and binary releases
 
-[The GitHub Actions workflow](../.github/workflows/ci.yml) builds and runs the unit,
-workload, recording/replay, and PTY tests on native Linux x86_64, Linux ARM64,
-and Apple Silicon runners for pushes and pull requests. It can also be run manually.
-It builds and caches the exact Sun revision from `toolchain.lock.json`, including
-its native stdlib, using LLVM 20. It does not build or download `sun_serve`.
+[The GitHub Actions workflow](../.github/workflows/ci.yml) downloads released Sun
+compilers and stdlibs, checking every artifact against `toolchain.lock.json`.
+It never builds the compiler or stdlib from source. LLVM 20 is a binary runtime
+dependency. Downloads are cached, but checksums are verified on every run.
+
+The release currently supplies Linux x86_64 and Apple Silicon compilers. Linux
+ARM64 uses the released x86_64 compiler, ARM64 stdlib, and a GNU cross linker.
+A separate native ARM64 job runs the resulting unit, workload, recording/replay,
+and PTY tests. The other two platforms also run their tests natively, without
+installing Sun in test jobs. Pushes, pull requests, and manual runs are supported.
+
+The upstream `dev` tag moves. If its artifacts change, CI fails checksum validation
+instead of silently upgrading. Review the new release, update its revision and
+artifact hashes in the lock, and rerun compatibility tests. No `sun_serve` artifacts
+are required.
 
 Each successful job uploads a `.tar.gz` archive and SHA-256 checksum as workflow
 artifacts. Pushing a version tag such as `v0.1.0` publishes a GitHub Release only
@@ -55,7 +65,7 @@ macOS 14 or later on Apple Silicon and are not Developer ID signed or notarized.
 Each archive includes the license, documentation, compiler lock, and build metadata.
 CI smoke-tests the extracted executable before uploading it.
 
-The workflow has not yet run on GitHub. The native support status above remains
+The binary-only workflow has not yet completed a run on GitHub. The native support status above remains
 provisional until those jobs and the remaining manual checks pass.
 
 ## Controls and options

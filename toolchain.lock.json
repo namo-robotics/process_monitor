@@ -1,7 +1,30 @@
 {
   "sun": {
-    "revision": "67560c84f00b5b200cc5f1d909bca0bae114bcf4",
+    "revision": "60e6aeca2b1d4b3a7c882077397e6608b49efb26",
     "version": "0.dev",
-    "repository": "https://github.com/namo-robotics/sun"
+    "repository": "https://github.com/namo-robotics/sun",
+    "release": "dev",
+    "artifacts": {
+      "sun_0.dev_amd64.deb": {
+        "url": "https://github.com/namo-robotics/sun/releases/download/dev/sun_0.dev_amd64.deb",
+        "sha256": "c0e5cdac84591057be0680fe65cb463eab2c87c8e49b5c673bc981ec9667e7cb"
+      },
+      "sun-0.dev-arm64-apple-darwin.tar.gz": {
+        "url": "https://github.com/namo-robotics/sun/releases/download/dev/sun-0.dev-arm64-apple-darwin.tar.gz",
+        "sha256": "404ee8186c0bd2c58574c6f2b1408d5451a498e5b2b5cded555d4e997ae7cc32"
+      },
+      "stdlib-x86_64-linux-gnu.moon": {
+        "url": "https://github.com/namo-robotics/sun/releases/download/dev/stdlib-x86_64-linux-gnu.moon",
+        "sha256": "ec8b5a123a4fbe82a46c234af9cf7d5288125921038416197d0c35af1d711994"
+      },
+      "stdlib-aarch64-linux-gnu.moon": {
+        "url": "https://github.com/namo-robotics/sun/releases/download/dev/stdlib-aarch64-linux-gnu.moon",
+        "sha256": "5f086ce47fbed9ec15a7fffadc1ddf492d2da36d955dfa85158bbdb1a5083ee3"
+      },
+      "stdlib-arm64-apple-darwin.moon": {
+        "url": "https://github.com/namo-robotics/sun/releases/download/dev/stdlib-arm64-apple-darwin.moon",
+        "sha256": "5dc741ba0b713b23c6ad078b69c63ff1994fd16f700c194a74c3a9294e5d0708"
+      }
+    }
   }
 }

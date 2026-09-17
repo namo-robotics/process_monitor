@@ -6,11 +6,13 @@ outside the agreed v1 scope and is not required to complete these stages.
 
 ## 1. Native Linux ARM64 validation
 
-**Prerequisite:** an ARM64 Linux host, native linker, and the pinned Sun compiler
-with an architecture-matched stdlib. This workspace only provides x86_64 runtime
+**Prerequisite:** an ARM64 Linux host and binaries built with the released Sun
+x86_64 compiler, ARM64 stdlib, and GNU cross linker. A native ARM64 compiler is
+not currently published upstream. This workspace only provides x86_64 runtime
 validation; ARM64 object generation has been checked.
 
-- Run `scripts/test.sh` natively. Include a multithreaded CPU workload and a known
+- Run the CI native ARM64 test job (or the transferred test binaries and
+  `tests/integration.py`). Include a multithreaded CPU workload and a known
   resident-memory allocation; verify one-core CPU semantics, process churn, PID
   identity, permissions, history eviction, and recording/replay.
 - Exercise terminal resize, display pause while recording, keyboard quit, and
@@ -18,7 +20,7 @@ validation; ARM64 object generation has been checked.
 - Measure overhead with the expected robot process count and history duration.
 - Record OS, kernel, architecture, compiler revision, and results in this file.
 
-**Acceptance:** native build and all tests pass, memory stays bounded by retained
+**Acceptance:** the cross build and all native tests pass, memory stays bounded by retained
 history plus documented working buffers, and terminal settings restore reliably.
 Only then mark Linux ARM64 runtime support verified in the README.
 
@@ -92,3 +94,9 @@ archive packaging were checked locally; the remote jobs have not run here.
 - Download each archive on a clean matching host and verify `SHA256SUMS` and startup.
 - Verify tagged publication and draft recovery with the first intended release.
 - Add Developer ID signing/notarization if macOS distribution requires it.
+
+The CI toolchain now installs only checksum-pinned released artifacts. Linux ARM64
+is cross-built on x86_64 and tested on a native ARM64 runner. Validate that link
+step and the native macOS job in the next GitHub run; local Linux x86_64 tests pass
+with released Sun revision `60e6aeca2b1d`. Do not restore compiler source builds as
+a fallback for a missing or changed artifact.

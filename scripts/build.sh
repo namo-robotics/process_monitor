@@ -10,5 +10,8 @@ if [[ "$($SUN_BIN --version)" != *"$expected"* && "${ALLOW_UNTESTED_SUN:-0}" != 
 fi
 link_flags=()
 if [[ $(uname -s) == Darwin ]]; then link_flags+=(-lproc); fi
+if [[ -n "${SUN_TARGET:-}" ]]; then
+  link_flags+=(--target "$SUN_TARGET")
+fi
 mkdir -p build
 "$SUN_BIN" -c --dynamic -o build/process_monitor src/main.sun "${link_flags[@]}"

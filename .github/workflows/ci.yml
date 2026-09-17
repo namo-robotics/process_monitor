@@ -1,5 +1,5 @@
 # Build and test on native hosts; publish only a complete, tested release matrix.
-name: Build, test, and release
+name: CI
 
 on:
   push:
@@ -16,10 +16,86 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  build:
-    name: Test ${{ matrix.target }}
+  compile:
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+            triple: x86_64-linux-gnu
+          - runner: ubuntu-24.04
+            target: linux-arm64
+            triple: aarch64-linux-gnu
+          - runner: macos-14
+            target: macos-arm64
+            triple: arm64-apple-darwin
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Linux compiler runtime and native linker
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --location --retry 3 https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 20
+          sudo apt-get install -y libllvm20 g++
+
+      - name: Install ARM64 cross linker
+        if: matrix.target == 'linux-arm64'
+        run: sudo apt-get install -y g++-aarch64-linux-gnu
+
+      - name: Install macOS compiler runtime
+        if: runner.os == 'macOS'
+        run: brew install llvm@20
+
+      - name: Cache checksum-pinned release downloads
+        uses: actions/cache@v4
+        with:
+          path: .ci/downloads
+          key: sun-release-${{ runner.os }}-${{ hashFiles('toolchain.lock.json') }}
+
+      - name: Install precompiled Sun and matching stdlibs
+        run: scripts/ci-toolchain.sh
+
+      - name: Select target standard library
+        env:
+          TARGET_TRIPLE: ${{ matrix.triple }}
+        run: |
+          echo "$GITHUB_WORKSPACE/.ci/toolchain/bin" >> "$GITHUB_PATH"
+          mkdir -p build
+          cp ".ci/toolchain/lib/sun/$TARGET_TRIPLE/stdlib.moon" build/stdlib.moon
+
+      - name: Check formatting
+        run: sun fmt --check src tests
+
+      - name: Build application and tests
+        env:
+          SUN_TARGET: ${{ matrix.target == 'linux-arm64' && matrix.triple || '' }}
+        run: scripts/build.sh
+
+      - name: Bundle executables for native testing
+        run: tar -czf build/test-binaries.tar.gz -C build process_monitor process_monitor_test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-${{ matrix.target }}
+          path: build/test-binaries.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  test:
+    name: Test ${{ matrix.target }}
+    needs: compile
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -38,59 +114,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read pinned compiler revision
-        id: sun
-        run: |
-          python3 - <<'PY'
-          import json, os, re
-          revision = json.load(open('toolchain.lock.json'))['sun']['revision']
-          assert re.fullmatch('[0-9a-f]{40}', revision), 'Expected an immutable Sun revision'
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'revision={revision}\n')
-          PY
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          curl --fail --location --retry 3 https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
-          sudo bash "$RUNNER_TEMP/llvm.sh" 20
-          sudo apt-get install -y llvm-20-dev clang-20 lld-20 libzstd-dev libffi-dev libxml2-dev zlib1g-dev libedit-dev ninja-build cmake
-
-      - name: Install macOS build dependencies
-        if: runner.os == 'macOS'
-        run: brew install llvm@20 ninja cmake
-
-      - name: Restore native compiler and standard library
-        id: cache
-        uses: actions/cache@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: .ci/toolchain
-          key: sun-${{ matrix.runner }}-${{ matrix.target }}-${{ steps.sun.outputs.revision }}-${{ hashFiles('scripts/ci-toolchain.sh', '.github/workflows/ci.yml') }}
+          name: test-binaries-${{ matrix.target }}
+          path: build
 
-      - name: Check out pinned Sun sources
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: namo-robotics/sun
-          ref: ${{ steps.sun.outputs.revision }}
-          path: .ci/sun-source
-          persist-credentials: false
-
-      - name: Build native compiler and standard library
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: scripts/ci-toolchain.sh
-
-      - name: Select pinned toolchain
+      - name: Run native unit, workload, replay, and terminal tests
         run: |
-          echo "$GITHUB_WORKSPACE/.ci/toolchain" >> "$GITHUB_PATH"
-          mkdir -p build
-          cp .ci/toolchain/stdlib.moon build/stdlib.moon
-
-      - name: Check formatting
-        run: sun fmt --check src tests
-
-      - name: Build and run unit, workload, replay, and terminal tests
-        run: scripts/test.sh
+          tar -xzf build/test-binaries.tar.gz -C build
+          build/process_monitor_test
+          python3 tests/integration.py
 
       - name: Package and smoke-test release archive
         env:
@@ -113,7 +146,7 @@ jobs:
 
   release:
     name: Publish tagged binaries
-    needs: build
+    needs: test
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
