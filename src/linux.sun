@@ -95,6 +95,38 @@ public module process_monitor {
     return p;
   }
 
+  /* Opens a stable process handle so PID reuse cannot redirect a signal. */
+  extern "C" function pm_pidfd_open(pid: i32, flags: u32) i32 as "pidfd_open";
+  /* Sends a signal to the process referenced by an open handle. */
+  extern "C" function pm_pidfd_signal(fd: i32, signal: i32, info: raw_ptr<u8>, flags: u32) i32 as "pidfd_send_signal";
+  /* Releases a process handle after use. */
+  extern "C" function pm_close(fd: i32) i32 as "close";
+
+  /* Pins the process, verifies its start time, and sends the requested signal. */
+  function signal_process(a: ref HeapAllocator, pid: i32, start: i64, signal: i32) void throws IError {
+    var fd = unsafe { pm_pidfd_open(pid, 0); };
+    if (fd < 0) {
+      throw Error(1, "process handle unavailable");
+    }
+    try {
+      var path = String("/proc/");
+      path.append(pid);
+      path.append("/stat");
+      var stat = std.io.read_to_string(a, path);
+      var process = parse_stat(a, stat, 1);
+      if (process.start != start) {
+        throw Error(1, "process identity changed");
+      }
+      if (unsafe { pm_pidfd_signal(fd, signal, null, 0); } != 0) {
+        throw Error(1, "signal rejected");
+      }
+    } catch (e: IError) {
+      unsafe { pm_close(fd); };
+      throw e;
+    }
+    unsafe { pm_close(fd); };
+  }
+
   /* Samples visible processes and counts entries that disappear or cannot be read. */
   function collect(a: ref HeapAllocator, elapsed: i64) Frame throws IError {
     var f = Frame(a);

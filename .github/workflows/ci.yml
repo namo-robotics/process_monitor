@@ -1,0 +1,150 @@
+# Build and test on native hosts; publish only a complete, tested release matrix.
+name: Build, test, and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v[0-9]*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Test ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-14
+            target: macos-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read pinned compiler revision
+        id: sun
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          revision = json.load(open('toolchain.lock.json'))['sun']['revision']
+          assert re.fullmatch('[0-9a-f]{40}', revision), 'Expected an immutable Sun revision'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'revision={revision}\n')
+          PY
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --location --retry 3 https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 20
+          sudo apt-get install -y llvm-20-dev clang-20 lld-20 libzstd-dev libffi-dev libxml2-dev zlib1g-dev libedit-dev ninja-build cmake
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install llvm@20 ninja cmake
+
+      - name: Restore native compiler and standard library
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .ci/toolchain
+          key: sun-${{ matrix.runner }}-${{ matrix.target }}-${{ steps.sun.outputs.revision }}-${{ hashFiles('scripts/ci-toolchain.sh', '.github/workflows/ci.yml') }}
+
+      - name: Check out pinned Sun sources
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: namo-robotics/sun
+          ref: ${{ steps.sun.outputs.revision }}
+          path: .ci/sun-source
+          persist-credentials: false
+
+      - name: Build native compiler and standard library
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/ci-toolchain.sh
+
+      - name: Select pinned toolchain
+        run: |
+          echo "$GITHUB_WORKSPACE/.ci/toolchain" >> "$GITHUB_PATH"
+          mkdir -p build
+          cp .ci/toolchain/stdlib.moon build/stdlib.moon
+
+      - name: Check formatting
+        run: sun fmt --check src tests
+
+      - name: Build and run unit, workload, replay, and terminal tests
+        run: scripts/test.sh
+
+      - name: Package and smoke-test release archive
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_REF: ${{ github.ref_name }}
+          PACKAGE_SHA: ${{ github.sha }}
+          PACKAGE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          version="commit-${PACKAGE_SHA:0:12}"
+          if [[ "$PACKAGE_REF_TYPE" == tag ]]; then version="$PACKAGE_REF"; fi
+          python3 scripts/package.py "$version" "$PACKAGE_TARGET" "$PACKAGE_SHA"
+
+      - name: Upload tested binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-monitor-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish tagged binaries
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: process-monitor-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify complete release and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          cd dist
+          for target in linux-x86_64 linux-arm64 macos-arm64; do
+            archive="process_monitor-$RELEASE_TAG-$target.tar.gz"
+            test -f "$archive"
+            sha256sum --check "$archive.sha256"
+          done
+          cat ./*.sha256 > SHA256SUMS
+          # Keep partial uploads in a draft; reruns may resume an unfinished draft.
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json 2>/dev/null; then
+            python3 -c 'import json; assert json.load(open("release.json"))["isDraft"], "Release already published; use a new tag"'
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
+          fi
+          gh release upload "$RELEASE_TAG" ./*.tar.gz SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

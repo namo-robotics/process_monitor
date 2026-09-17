@@ -9,6 +9,8 @@ public module process_monitor {
     var limit: i64 = 67108864;
     var duration: i64 = 600000;
     var evicted: bool = false;
+    var origin: i64 = -1;
+    var latest: i64 = 0;
     /* Initializes owned state and resources for this object. */
     init(alloc: const ref HeapAllocator) {
       this.frames = Vec<Frame>(alloc, 16);
@@ -16,6 +18,10 @@ public module process_monitor {
     /* Retains a sample and evicts the oldest frames when limits are exceeded. */
     method add(frame: Frame) void throws IError {
       var latest = frame.elapsed;
+      if (this.origin < 0) {
+        this.origin = latest;
+      }
+      this.latest = latest;
       var cost = frame.cost();
       while (this.frames.size() > 0) {
         if (latest - this.frames.get(0).elapsed <= this.duration and this.bytes + cost <= this.limit) {

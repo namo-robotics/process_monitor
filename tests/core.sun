@@ -149,9 +149,8 @@ public module process_monitor {
       var next = Frame(a);
       next.elapsed = 1000;
       history.add(next);
-      var id = String("2:3");
-      var line = spark(a, history, id, false, 2);
-      std.test.assert(line.equals_literal("@ "), "exit remains a gap, not zero");
+      std.test.assert(history_value(history.frames.get(0), 2, 3, false) == 50.0, "retained measurement");
+      std.test.assert(history_value(history.frames.get(1), 2, 3, false) < 0.0, "exit stays unavailable");
     }
     /* Filters ROS remaps to the ROS argument section. */
     test_function ordinary_arguments_do_not_rename_processes() {

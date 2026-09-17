@@ -4,7 +4,7 @@ public module process_monitor {
 
   /* Prints the supported first-version command-line interface. */
   function help() void {
-    println("Usage: process_monitor [options]\n  --ui terminal              only terminal hosting is included in v1\n  --top N|all                 default 10\n  --sort cpu|memory           default cpu\n  --interval SECONDS         default 1, minimum 0.1\n  --history SECONDS          default 600\n  --memory-limit MiB         retained history ceiling, default 64\n  --record FILE              write all samples as JSON Lines\n  --replay FILE              replay a recorded session\n  --labels FILE              JSON object mapping PID strings to labels\n  --samples N                exit after N samples\n  --help                     show this help\n\nTerminal: q quit, c/m sort, 5/0/a top 5/10/all, j/k select, space pause, ? help");
+    println("Usage: process_monitor [options]\n  --ui terminal              only terminal hosting is included in v1\n  --top N|all                 default 10\n  --sort cpu|memory           default cpu\n  --interval SECONDS         default 1, minimum 0.1\n  --graph-window SECONDS     graph time span, default 60\n  --history SECONDS          default 600\n  --memory-limit MiB         retained history ceiling, default 64\n  --record FILE              write all samples as JSON Lines\n  --replay FILE              replay a recorded session\n  --labels FILE              JSON object mapping PID strings to labels\n  --samples N                exit after N samples\n  --help                     show this help\n\nTerminal: q quit, c/m sort, 5/0/a top 5/10/all, ↑/↓ select, t terminate, k kill, space pause, ? help");
   }
 
   /* Owns the independent pieces of a monitoring session. */

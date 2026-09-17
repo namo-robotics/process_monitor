@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import pty
+import re
 import select
 import signal
 import struct
@@ -30,7 +31,10 @@ def recording_and_workload(directory):
     try:
         time.sleep(.15)
         path = directory / 'session.jsonl'
-        run('--samples', 4, '--interval', '.15', '--top', 1, '--record', path)
+        result = run('--samples', 4, '--interval', '.15', '--top', 1, '--record', path)
+        assert '\x1b' not in result.stdout, 'redirected tables must not contain ANSI styling'
+        table_lines = [line for line in result.stdout.splitlines() if line.startswith(('+', '|'))]
+        assert table_lines and all(len(line) == 79 for line in table_lines)
         records = [json.loads(line) for line in path.read_text().splitlines()]
         assert records[0]['type'] == 'session'
         assert len(records) == 5
@@ -79,8 +83,8 @@ def terminal_cleanup(directory):
                 ready, _, _ = select.select([master], [], [], .1)
                 if ready:
                     output.extend(os.read(master, 65536))
-            os.write(master, b'm5jk? ')
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 16, 68, 0, 0))
+            os.write(master, b'm5\x1b[B\x1b[A? ')
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 68, 0, 0))
             time.sleep(.1)
             count_before = len(record.read_text().splitlines())
             time.sleep(.3)
@@ -97,6 +101,15 @@ def terminal_cleanup(directory):
             assert child.returncode == 0, output.decode(errors='replace')
             assert termios.tcgetattr(slave) == original
             assert b'\x1b[?1049h' in output and b'\x1b[?1049l' in output
+            assert b'\x1b[0;36m' in output, 'colored table borders'
+            assert b'\x1b[1;97;44m' in output, 'selected row highlight'
+            plain = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', output.decode())
+            lines = [line for line in plain.splitlines() if line.startswith(('╭', '├', '╰', '│'))]
+            assert lines and all(len(line) in (99, 67) for line in lines), lines
+            assert any('┼' in line for line in lines), 'column divider junctions'
+            assert 'TOP 5 CPU HISTORY' in plain
+            assert any(0x2800 < ord(char) <= 0x28FF for char in plain), 'dot graph rendered'
+            assert b'\x1b[38;5;' in output, 'series colors rendered'
         finally:
             if child.poll() is None:
                 child.kill()

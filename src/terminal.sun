@@ -4,6 +4,7 @@ public module process_monitor {
 
   /* Owns interactive display state and restores the terminal when released. */
   class Terminal {
+    var trend: TrendGraph;
     var saved: ContiguousBuffer<u64>;
     var active: bool = false;
     var paused: bool = false;
@@ -11,10 +12,16 @@ public module process_monitor {
     var finished: bool = false;
     var selected: String = String("");
     var selected_row: i64 = 0;
+    var escape_state: i64 = 0;
+    var selected_pid: i64 = 0;
+    var selected_start: i64 = 0;
+    var pending_signal: i32 = 0;
+    var notice: String = String("");
     var rows: i64 = 24;
     var columns: i64 = 80;
     /* Initializes owned state and resources for this object. */
     init(a: const ref HeapAllocator, enabled: bool) throws IError {
+      this.trend = TrendGraph(a);
       this.saved = ContiguousBuffer<u64>(a, 32);
       if (enabled and unsafe { pm_isatty(0); } == 1 and unsafe { pm_isatty(1); } == 1) {
         if (unsafe { pm_tcgetattr(0, this.saved.raw_data()); } != 0) {
@@ -34,7 +41,7 @@ public module process_monitor {
     deinit() {
       if (this.active) {
         unsafe { pm_tcsetattr(0, 0, this.saved.raw_data()); };
-        var escape = String("\x1b[?25h\x1b[?1049l");
+        var escape = String("\x1b[0m\x1b[?25h\x1b[?1049l");
         output(escape);
       }
     }
@@ -52,6 +59,7 @@ public module process_monitor {
       if (events.size() == 0) {
         return old_rows != this.rows or old_columns != this.columns;
       }
+      this.notice.clear();
       var buffer = ContiguousBuffer<u8>(a, 32);
       var n = unsafe { pm_read(0, buffer.raw_data(), 32u64); };
       if (n == 0) {
@@ -59,14 +67,22 @@ public module process_monitor {
       }
       for (var i: i64 = 0; i < n; i = i + 1) {
         this.apply_key(buffer.get(i), o);
+        this.perform_action(a, o);
       }
       return true;
     }
 
     /* Applies one terminal command to display state only. */
     method apply_key(ch: u8, o: ref Options) void {
+      if (this.arrow_key(ch)) {
+        return;
+      }
       if (ch == b'q' or ch == 3u8) {
         on_signal(0);
+      } else if (ch == b't') {
+        this.pending_signal = 15;
+      } else if (ch == b'k') {
+        this.pending_signal = 9;
       } else if (ch == b' ') {
         this.paused = not this.paused;
       } else if (ch == b'h' or ch == b'?') {
@@ -81,15 +97,62 @@ public module process_monitor {
         o.top = 10;
       } else if (ch == b'a') {
         o.top = 0;
-      } else if (ch == b'j') {
-        this.selected_row = this.selected_row + 1;
-        this.selected.clear();
-      } else if (ch == b'k') {
-        if (this.selected_row > 0) {
-          this.selected_row = this.selected_row - 1;
-        }
-        this.selected.clear();
       }
+    }
+
+    /* Executes a requested live-process action and reports the result while paused. */
+    method perform_action(a: ref HeapAllocator, o: ref Options) void throws IError {
+      if (this.pending_signal == 0) {
+        return;
+      }
+      var signal: i32 = this.pending_signal;
+      this.pending_signal = 0;
+      if (not o.replay.is_empty()) {
+        this.notice = String("Process actions are disabled during replay");
+      } else if (this.selected.is_empty() or this.selected_pid == 0) {
+        this.notice = String("Select a visible process before sending a signal");
+      } else {
+        this.notice = control_process(a, this.selected_pid, this.selected_start, signal);
+      }
+      if (this.active and this.paused) {
+        var message = String("\x1b[H\x1b[2K");
+        message.append(safe_text(a, this.notice, this.columns - 1));
+        output(message);
+      }
+    }
+
+    /* Decodes arrow sequences across reads and consumes other escape sequences. */
+    method arrow_key(ch: u8) bool {
+      if (ch == 27u8) {
+        this.escape_state = 1;
+        return true;
+      }
+      if (this.escape_state == 1) {
+        this.escape_state = 0;
+        if (ch == b'[' or ch == b'O') {
+          this.escape_state = 2;
+          return true;
+        }
+      } else if (this.escape_state == 2) {
+        if (ch >= 64u8 and ch <= 126u8) {
+          this.escape_state = 0;
+          if (ch == b'A' or ch == b'B') {
+            this.move_selection(ch == b'B');
+          }
+        }
+        return true;
+      }
+      return false;
+    }
+
+    /* Moves the highlighted row while keeping the upper boundary in range. */
+    method move_selection(down: bool) void {
+      if (down) {
+        this.selected_row = this.selected_row + 1;
+      } else if (this.selected_row > 0) {
+        this.selected_row = this.selected_row - 1;
+      }
+      this.selected.clear();
     }
 
     /* Refreshes the cached terminal dimensions. */
@@ -105,7 +168,7 @@ public module process_monitor {
         this.columns = _convert<i64>(b.get(1));
       }
     }
-    /* Renders the table and selected history without changing collected samples. */
+    /* Renders the table and top-process history without changing collected samples. */
     method draw(a: ref HeapAllocator, frame: ref Frame, history: ref History, o: ref Options) void throws IError {
       if (this.paused) {
         return;
@@ -115,36 +178,44 @@ public module process_monitor {
       if (this.active) {
         out.append("\x1b[H\x1b[2J");
       }
-      if (this.active and (this.columns < 65 or this.rows < 15)) {
-        out.append("Enlarge terminal to at least 65 columns and 15 rows. q quits.");
+      if (this.active and (this.columns < 65 or this.rows < 17)) {
+        out.append("Enlarge terminal to at least 65 columns and 17 rows. q quits.");
         output(out);
         return;
       }
-      this.header(out, frame, history);
+      this.header(a, out, frame, history);
       this.table(a, out, frame, history, o);
-      this.graphs(a, out, history);
+      this.trend.duration = o.graph_window;
+      this.trend.select(a, frame, o.memory);
+      var style = TableStyle(this.columns, this.active);
+      this.trend.draw(a, out, style, history, o.memory, this.graph_height());
       output(out);
     }
 
     /* Writes the resource and retention summary above the table. */
-    method header(out: ref String, frame: ref Frame, history: ref History) void throws IError {
-      out.append("PROCESS MONITOR | CPU / MEMORY | ");
-      out.append(frame.processes.size());
-      out.append(" processes");
+    method header(a: const ref HeapAllocator, out: ref String, frame: ref Frame, history: ref History) void throws IError {
+      var style = TableStyle(this.columns, this.active);
+      var title = String("PROCESS MONITOR  |  ");
+      title.append(frame.processes.size());
+      title.append(" processes  |  history ");
+      title.append(history.window() / 1000);
+      title.append("s  |  skipped ");
+      title.append(frame.inaccessible);
       if (this.finished) {
-        out.append(" | REPLAY COMPLETE");
+        title.append("  |  REPLAY COMPLETE");
       }
-      out.append("\r\n");
-      out.append("History ");
-      out.append(history.window() / 1000);
-      out.append("s | skipped ");
-      out.append(frame.inaccessible);
-      out.append("\r\n");
-      out.append("q quit  c/m sort  5/0/a top  j/k select  space pause  ? help\r\n");
-      if (this.help) {
-        out.append("CPU: 100% = one core. Memory: resident MiB. N/A = unavailable.\r\nDisplay filters never restrict collection or recording.\r\n");
+      if (not this.notice.is_empty()) {
+        title = this.notice.clone(a);
       }
-      out.append("  PID      CPU %     RSS MiB    MEM %    NAME\r\n");
+      style.color(out, "\x1b[1;36m");
+      out.append(safe_text(a, title, style.width));
+      style.color(out, "\x1b[0m");
+      out.append("\r\n");
+      out.append("q quit  c/m sort  ↑/↓ select  t terminate  k kill  ? help\r\n");
+      if (this.help and this.rows >= 21) {
+        out.append("CPU: 100% = one core. Memory: resident MiB. N/A = unavailable.\r\n");
+        out.append("5/0/a top 5/10/all. Space pauses display, not collection.\r\n");
+      }
     }
 
     /* Keeps the selection attached to its identity as ranks change. */
@@ -173,8 +244,9 @@ public module process_monitor {
         count = o.top;
       }
       this.locate_selection(a, frame, order, count);
-      var visible = this.rows - 11;
-      if (this.help) {
+      this.selected_pid = 0;
+      var visible = this.rows - this.graph_height() - 15;
+      if (this.help and this.rows >= 21) {
         visible = visible - 2;
       }
       if (not this.active) {
@@ -184,53 +256,72 @@ public module process_monitor {
       if (this.selected_row >= visible) {
         first = this.selected_row - visible + 1;
       }
+      var style = TableStyle(this.columns, this.active);
+      style.rule(out, 0, true);
+      this.headings(a, out, style, o.memory);
+      style.rule(out, 1, true);
       for (var i = first; i < count and i < first + visible; i = i + 1) {
-        this.row(a, out, frame.processes.get(order.get(i)), history, o.memory);
+        this.row(a, out, frame.processes.get(order.get(i)));
       }
+      style.rule(out, 2, true);
     }
 
-    /* Formats one process row with a compact resource sparkline. */
-    method row(a: const ref HeapAllocator, out: ref String, p: ref Process, history: ref History, memory: bool) void throws IError {
-      var id = p.id();
-      if (id.equals(this.selected)) {
-        out.append("> ");
+    /* Labels the columns and marks the resource currently used for ranking. */
+    method headings(a: const ref HeapAllocator, out: ref String, style: ref TableStyle, memory: bool) void throws IError {
+      style.edge(out, "│", "|");
+      var names = String("PID|NAME|CPU %|MEM %|RSS MiB");
+      if (memory) {
+        names = String("PID|NAME|CPU %|MEM %|RSS MiB *");
       } else {
-        out.append("  ");
+        names = String("PID|NAME|CPU % *|MEM %|RSS MiB");
       }
+      var headers = names.split(a, b'|');
+      for (var col: i64 = 0; col < 5; col = col + 1) {
+        style.color(out, "\x1b[1;36m");
+        style.cell(a, out, headers.get(col), style.column(col), col != 1, false);
+      }
+      out.append("\r\n");
+    }
+
+    /* Formats aligned resource columns and highlights the selected identity. */
+    method row(a: const ref HeapAllocator, out: ref String, p: ref Process) void throws IError {
+      var style = TableStyle(this.columns, this.active);
+      var id = p.id();
+      var selected = id.equals(this.selected);
       var pid = String("");
+      if (selected) {
+        this.selected_pid = p.pid;
+        this.selected_start = p.start;
+        pid.append("> ");
+      }
       pid.append(p.pid);
-      out.append(padded(pid, 9));
-      out.append(padded(decimal(p.cpu), 10));
       var rss: f64 = -1.0;
       if (p.rss >= 0) {
         rss = _convert<f64>(p.rss) / 1048576.0;
       }
-      out.append(padded(decimal(rss), 11));
-      out.append(padded(decimal(p.memory), 9));
-      var width = this.columns - 55;
-      if (width < 5) {
-        width = 5;
+      var cells = Vec<String>(a, 5);
+      cells.push(pid);
+      cells.push(p.label.clone(a));
+      cells.push(decimal(p.cpu));
+      cells.push(decimal(p.memory));
+      cells.push(decimal(rss));
+      style.edge(out, "│", "|");
+      for (var col: i64 = 0; col < 5; col = col + 1) {
+        style.cell(a, out, cells.get(col), style.column(col), col != 1, selected);
       }
-      out.append(safe_text(a, p.label, width));
-      out.append(" ");
-      out.append(spark(a, history, id, memory, 8));
       out.append("\r\n");
     }
 
-    /* Writes separate CPU and resident-memory history scales. */
-    method graphs(a: const ref HeapAllocator, out: ref String, history: ref History) void throws IError {
-      out.append("\r\nSelected ");
-      out.append(this.selected);
-      out.append(" (gaps = unavailable/exited)\r\n");
-      out.append("CPU %   ");
-      out.append(spark(a, history, this.selected, false, this.columns - 28));
-      out.append("\r\n");
-      out.append("RSS MiB ");
-      out.append(spark(a, history, this.selected, true, this.columns - 28));
-      out.append("\r\n");
-      if (history.evicted) {
-        out.append("History bounded by duration and memory limit.\r\n");
+    /* Shares vertical space between the process table and the top-process graph. */
+    method graph_height() i64 {
+      var height = (this.rows - 14) / 3;
+      if (height < 1) {
+        return 1;
       }
+      if (height > 8) {
+        return 8;
+      }
+      return height;
     }
   }
 }

@@ -80,3 +80,15 @@ multiple nodes in one process must not be presented as independently measured.
 
 **Acceptance:** discovery handles multiple nodes per process, renamed nodes,
 namespaces, process exits, and absent ROS installations without blocking sampling.
+
+## 5. First CI run and release validation
+
+The native build/test/release matrix is in `.github/workflows/ci.yml`. Run it on
+GitHub after pushing, inspect all three native job logs, and address any hosted
+runner or platform failures before creating a version tag. The workflow and Linux
+archive packaging were checked locally; the remote jobs have not run here.
+
+- Record native results for stages 1 and 2; retain the real-terminal and overhead checks.
+- Download each archive on a clean matching host and verify `SHA256SUMS` and startup.
+- Verify tagged publication and draft recovery with the first intended release.
+- Add Developer ID signing/notarization if macOS distribution requires it.

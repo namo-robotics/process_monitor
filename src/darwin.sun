@@ -77,6 +77,19 @@ public module process_monitor {
     return _convert<i64>(info.start_seconds * 1000000 + info.start_microseconds);
   }
 
+  /* Sends a POSIX signal to a single process. */
+  extern "C" function pm_kill(pid: i32, signal: i32) i32 as "kill";
+
+  /* Rechecks the observed identity immediately before signalling a macOS process. */
+  function signal_process(a: ref HeapAllocator, pid: i32, start: i64, signal: i32) void throws IError {
+    if (darwin_identity(pid) != start) {
+      throw Error(1, "process identity changed");
+    }
+    if (unsafe { pm_kill(pid, signal); } != 0) {
+      throw Error(1, "signal rejected");
+    }
+  }
+
   /* Copies only argv from KERN_PROCARGS2, excluding environment variables. */
   function darwin_arguments(a: const ref HeapAllocator, pid: i32) String throws IError {
     var mib = ContiguousBuffer<i32>(a, 3);

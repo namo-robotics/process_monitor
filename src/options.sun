@@ -8,6 +8,7 @@ public module process_monitor {
     var memory: bool = false;
     var interval: i64 = 1000;
     var history: i64 = 600000;
+    var graph_window: i64 = 60000;
     var budget: i64 = 67108864;
     var record: String = String("");
     var replay: String = String("");
@@ -25,6 +26,8 @@ public module process_monitor {
         this.memory = parse_sort(value);
       } else if (key.equals_literal("--interval")) {
         this.interval = parse_duration(value);
+      } else if (key.equals_literal("--graph-window")) {
+        this.graph_window = parse_duration(value);
       } else if (key.equals_literal("--history")) {
         this.history = parse_duration(value);
       } else if (key.equals_literal("--memory-limit")) {
