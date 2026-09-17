@@ -10,6 +10,7 @@ import select
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -77,6 +78,16 @@ def drain_terminal(master, output, duration):
             output.extend(os.read(master, 65536))
 
 
+def assert_terminal_restored(original, restored):
+    """Check all terminal settings, allowing macOS's pending-input state."""
+    expected, actual = original.copy(), restored.copy()
+    if sys.platform == 'darwin':
+        # Darwin sets PENDIN when restoring canonical mode after raw input.
+        expected[3] &= ~termios.PENDIN
+        actual[3] &= ~termios.PENDIN
+    assert actual == expected, f'terminal settings not restored: before={original!r}, after={restored!r}'
+
+
 def terminal_cleanup(directory):
     """Exercise interactive commands, resizing, pause, and signal restoration."""
     for shutdown in ('keyboard', 'signal'):
@@ -111,7 +122,7 @@ def terminal_cleanup(directory):
             while select.select([master], [], [], 0)[0]:
                 output.extend(os.read(master, 65536))
             assert child.returncode == 0, output.decode(errors='replace')
-            assert termios.tcgetattr(slave) == original
+            assert_terminal_restored(original, termios.tcgetattr(slave))
             assert b'\x1b[?1049h' in output and b'\x1b[?1049l' in output
             assert b'\x1b[0;36m' in output, 'colored table borders'
             assert b'\x1b[1;97;44m' in output, 'selected row highlight'
